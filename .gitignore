@@ -44,3 +44,4 @@ publish/
 
 # Dotnet tools
 .dotnet/
+.claude/
