@@ -45,3 +45,5 @@ publish/
 # Dotnet tools
 .dotnet/
 .claude/
+/examples/CheckersApi/bin/
+/examples/CheckersApi/obj/
