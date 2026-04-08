@@ -24,10 +24,9 @@ Brazilian Checkers (Damas Brasileiras) engine — pure C# class library targetin
 
 ## Installation
 
-This is a class library — reference it directly from your project:
+Reference the library directly from your `.csproj`:
 
 ```xml
-<!-- In your .csproj -->
 <ItemGroup>
   <ProjectReference Include="..\checkers-engine\CheckersEngine.csproj" />
 </ItemGroup>
@@ -43,23 +42,23 @@ Requires **.NET 8.0** or later.
 using CheckersEngine;
 using CheckersEngine.Engine;
 
-// Create engine with default settings (8 s per move)
+// 1. Create the engine (default: 8 s per move, all features enabled)
 var engine = new BrazilianCheckersEngine();
 
-// Standard starting position
+// 2. Get the standard starting position
 var board = Board.StartingPosition();
 
-// Find best move for black (engine side)
+// 3. Ask for the best move (engine plays black)
 Move? best = engine.FindBestMove(board);
 if (best.HasValue)
 {
-    Console.WriteLine($"Engine plays: {best.Value}");
-    board = Board.ApplyMove(board, best.Value); // or engine.ApplyMove(...)
+    Console.WriteLine($"Engine plays: {best.Value}");  // e.g. "(1,2)->(2,3)"
+    board = board.Apply(best.Value);
 }
 
-// Check if the game is over
+// 4. Check if the game ended
 if (BrazilianCheckersEngine.IsGameOver(board, blackTurn: false))
-    Console.WriteLine("Human has no moves — engine wins!");
+    Console.WriteLine("Red (human) has no moves — engine wins!");
 ```
 
 ---
@@ -73,7 +72,7 @@ All settings live in `EngineConfig`, an immutable record with `init`-only proper
 ```csharp
 EngineConfig.Blitz   // 1 s,  depth ≥ 3,  small TT (~16 MB)
 EngineConfig.Fast    // 2 s,  depth ≥ 5,  medium TT (~32 MB)
-EngineConfig.Default // 8 s,  depth ≥ 9,  standard TT (~64 MB)  ← matches services/checkers_bot
+EngineConfig.Default // 8 s,  depth ≥ 9,  standard TT (~64 MB)
 EngineConfig.Strong  // 15 s, depth ≥ 12, large TT (~128 MB)
 ```
 
@@ -84,9 +83,10 @@ Use C# `with` expressions to override individual properties:
 ```csharp
 var cfg = EngineConfig.Default with
 {
-    ThinkingMs = 5_000,       // 5 seconds per move
-    MinDepth   = 7,           // accept result after depth 7
-    UseOpeningBook = false,   // disable book (for testing)
+    ThinkingMs     = 5_000,      // 5 seconds per move
+    MinDepth       = 7,          // accept result after depth 7
+    UseOpeningBook = false,      // disable opening book (useful for testing)
+    UseQuiescence  = false,      // disable quiescence (faster, weaker)
 };
 var engine = new BrazilianCheckersEngine(cfg);
 ```
@@ -184,26 +184,344 @@ y=7  r    .    r    .    r    .    r    .     ← red start row
 var board = Board.StartingPosition();
 
 // From a 2-D string array (row-major: grid[y][x])
-var grid = new string?[8][];
-// ... fill grid[y][x] with "b", "B", "r", "R", or null ...
+var grid = new string?[8][]
+{
+    new string?[] { null, "b", null, "b", null, "b", null, "b" },
+    new string?[] { "b",  null, "b", null, "b", null, "b", null },
+    new string?[] { null, "b", null, "b", null, "b", null, "b" },
+    new string?[] { null, null, null, null, null, null, null, null },
+    new string?[] { null, null, null, null, null, null, null, null },
+    new string?[] { "r",  null, "r", null, "r", null, "r", null },
+    new string?[] { null, "r", null, "r", null, "r", null, "r" },
+    new string?[] { "r",  null, "r", null, "r", null, "r", null },
+};
 var board = Board.FromArray(grid);
 
 // From a JSON element array (for JSON-based protocols)
 var board = Board.FromJson(jsonGrid);
 
-// Serialize back to string array
+// Serialize back to string array (null = empty square)
 string?[][] arr = board.ToArray();
 ```
 
 ### Applying moves
 
 ```csharp
-Move mv = new Move(fx: 2, fy: 2, tx: 3, ty: 3);
+// Simple move: piece at (1,2) moves to (2,3)
+Move mv = new Move(fx: 1, fy: 2, tx: 2, ty: 3);
 Board next = board.Apply(mv);
 
-// Or via the engine helper
+// Capture move: piece at (1,2) jumps over (2,3) to land at (3,4)
+Move capture = new Move(fx: 1, fy: 2, tx: 3, ty: 4, isCapture: true);
+Board next = board.Apply(capture);
+
+// Via the static helper
 Board next = BrazilianCheckersEngine.ApplyMove(board, mv);
 ```
+
+---
+
+## Complete Game Loop Example
+
+This shows a full game cycle including draw logic and memory tracking:
+
+```csharp
+using CheckersEngine;
+using CheckersEngine.Engine;
+
+var engine = new BrazilianCheckersEngine(EngineConfig.Default);
+var memory = new GameMemory();
+var board  = Board.StartingPosition();
+bool blackTurn = true; // engine moves first
+
+while (true)
+{
+    // Check if the current side has no moves (game over)
+    if (BrazilianCheckersEngine.IsGameOver(board, blackTurn))
+    {
+        Console.WriteLine(blackTurn ? "Black has no moves — red wins!" : "Red has no moves — black wins!");
+        break;
+    }
+
+    if (blackTurn)
+    {
+        // Engine's turn
+        Move? best = engine.FindBestMove(board);
+        if (!best.HasValue) break;
+
+        Console.WriteLine($"Engine: {best.Value}");
+        board = board.Apply(best.Value);
+
+        // After engine moves, check if it wants to offer a draw
+        DrawOffer offer = engine.ShouldOfferDraw(board, memory);
+        if (offer.ShouldOffer)
+            Console.WriteLine($"Engine offers draw: {offer.Message}");
+    }
+    else
+    {
+        // Human's turn — read move from input
+        Console.Write("Your move (fx fy tx ty): ");
+        var parts = Console.ReadLine()!.Split(' ');
+        int fx = int.Parse(parts[0]), fy = int.Parse(parts[1]);
+        int tx = int.Parse(parts[2]), ty = int.Parse(parts[3]);
+        bool isCapture = Math.Abs(tx - fx) > 1;
+
+        // Record human move BEFORE applying it (for repetition tracking)
+        memory.RecordHumanMove(board, (fx, fy), (tx, ty));
+        board = board.Apply(new Move(fx, fy, tx, ty, isCapture));
+
+        // If human offers draw, consult the advisor
+        Console.Write("Offer draw? (y/n): ");
+        if (Console.ReadLine() == "y")
+        {
+            DrawDecision d = engine.ShouldAcceptDraw(board, memory);
+            Console.WriteLine(d.Accept ? $"Draw accepted: {d.Reason}" : $"Draw refused: {d.Reason}");
+            if (d.Accept) break;
+        }
+    }
+
+    blackTurn = !blackTurn;
+}
+
+memory.ResetGame(); // call at end of each game; preserves cross-game stats
+```
+
+### Chain captures
+
+When a capture chain is in progress, pass the active piece's coordinates so the engine only considers continuations from that piece:
+
+```csharp
+// The piece at (3,4) just captured and must continue
+Move? next = engine.FindBestMove(board, activePieceX: 3, activePieceY: 4);
+```
+
+---
+
+## Node.js Integration
+
+This library is a **.NET class library**, so Node.js cannot call it directly. The recommended approach is to wrap it in a minimal **ASP.NET Core HTTP API** and call that from Node.
+
+### 1. Create the ASP.NET Core wrapper (C#)
+
+Create a new project alongside the library:
+
+```bash
+dotnet new web -n CheckersApi
+cd CheckersApi
+dotnet add reference ../checkers-engine/CheckersEngine.csproj
+```
+
+`Program.cs`:
+
+```csharp
+using CheckersEngine;
+using CheckersEngine.Engine;
+
+var builder = WebApplication.CreateBuilder(args);
+var app     = builder.Build();
+
+// One engine instance per game — store in a dictionary keyed by session ID
+var engines  = new Dictionary<string, BrazilianCheckersEngine>();
+var memories = new Dictionary<string, GameMemory>();
+
+// ─── POST /game/start ───────────────────────────────────────────────────────
+// Body: { "preset": "default" | "fast" | "strong" | "blitz" }
+//       or a full config object with individual properties
+app.MapPost("/game/start", (StartRequest req) =>
+{
+    string id = Guid.NewGuid().ToString("N");
+
+    EngineConfig cfg = req.Preset?.ToLower() switch
+    {
+        "blitz"  => EngineConfig.Blitz,
+        "fast"   => EngineConfig.Fast,
+        "strong" => EngineConfig.Strong,
+        _        => EngineConfig.Default,
+    };
+
+    // Fine-tune individual properties when provided
+    if (req.ThinkingMs.HasValue)       cfg = cfg with { ThinkingMs       = req.ThinkingMs.Value };
+    if (req.MinDepth.HasValue)         cfg = cfg with { MinDepth         = req.MinDepth.Value };
+    if (req.UseOpeningBook.HasValue)   cfg = cfg with { UseOpeningBook   = req.UseOpeningBook.Value };
+    if (req.UseLMR.HasValue)           cfg = cfg with { UseLMR           = req.UseLMR.Value };
+
+    engines[id]  = new BrazilianCheckersEngine(cfg);
+    memories[id] = new GameMemory();
+
+    return Results.Ok(new { gameId = id, board = Board.StartingPosition().ToArray() });
+});
+
+// ─── POST /game/{id}/move ───────────────────────────────────────────────────
+// Body: { "board": [[...]], "thinkingMs": 5000 }
+app.MapPost("/game/{id}/move", (string id, MoveRequest req) =>
+{
+    if (!engines.TryGetValue(id, out var engine))
+        return Results.NotFound(new { error = "Game not found" });
+
+    var board = Board.FromArray(req.Board);
+    Move? best = engine.FindBestMove(board, thinkingMs: req.ThinkingMs ?? 0);
+
+    if (!best.HasValue)
+        return Results.Ok(new { gameOver = true, winner = "red" });
+
+    var next = board.Apply(best.Value);
+    var offer = engine.ShouldOfferDraw(next, memories[id]);
+
+    return Results.Ok(new
+    {
+        move     = new { fx = best.Value.Fx, fy = best.Value.Fy,
+                         tx = best.Value.Tx, ty = best.Value.Ty,
+                         isCapture = best.Value.IsCapture },
+        board    = next.ToArray(),
+        drawOffer = offer.ShouldOffer ? offer.Message : null,
+    });
+});
+
+// ─── POST /game/{id}/draw ───────────────────────────────────────────────────
+// Body: { "board": [[...]] }
+app.MapPost("/game/{id}/draw", (string id, BoardRequest req) =>
+{
+    if (!engines.TryGetValue(id, out var engine))
+        return Results.NotFound(new { error = "Game not found" });
+
+    var board    = Board.FromArray(req.Board);
+    var decision = engine.ShouldAcceptDraw(board, memories[id]);
+
+    return Results.Ok(new { accept = decision.Accept, reason = decision.Reason });
+});
+
+// ─── DELETE /game/{id} ──────────────────────────────────────────────────────
+app.MapDelete("/game/{id}", (string id) =>
+{
+    engines.Remove(id);
+    memories.Remove(id);
+    return Results.Ok();
+});
+
+app.Run("http://localhost:5000");
+
+// ─── Request models ──────────────────────────────────────────────────────────
+record StartRequest(
+    string?  Preset        = null,
+    int?     ThinkingMs    = null,
+    int?     MinDepth      = null,
+    bool?    UseOpeningBook = null,
+    bool?    UseLMR        = null);
+
+record MoveRequest(string?[][] Board, int? ThinkingMs = null);
+record BoardRequest(string?[][] Board);
+```
+
+Run it:
+
+```bash
+dotnet run --project CheckersApi
+```
+
+---
+
+### 2. Call from Node.js
+
+Install `node-fetch` (or use the native `fetch` available in Node 18+):
+
+```bash
+npm install node-fetch   # only needed for Node < 18
+```
+
+#### `checkers-client.js`
+
+```js
+const BASE = 'http://localhost:5000';
+
+// ─── Start a game ─────────────────────────────────────────────────────────
+
+async function startGame(options = {}) {
+  const res = await fetch(`${BASE}/game/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      preset: options.preset ?? 'default',   // 'blitz' | 'fast' | 'default' | 'strong'
+      thinkingMs:    options.thinkingMs,     // override think time (ms)
+      minDepth:      options.minDepth,       // override min depth
+      useOpeningBook: options.useOpeningBook, // true | false
+      useLMR:        options.useLMR,         // true | false
+    }),
+  });
+  return res.json(); // { gameId, board }
+}
+
+// ─── Ask the engine to move ───────────────────────────────────────────────
+
+async function engineMove(gameId, board, thinkingMs) {
+  const res = await fetch(`${BASE}/game/${gameId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ board, thinkingMs }),
+  });
+  return res.json();
+  // { move: { fx, fy, tx, ty, isCapture }, board, drawOffer }
+}
+
+// ─── Ask if the engine accepts a draw ────────────────────────────────────
+
+async function askDraw(gameId, board) {
+  const res = await fetch(`${BASE}/game/${gameId}/draw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ board }),
+  });
+  return res.json(); // { accept: bool, reason: string }
+}
+
+// ─── End the game session ─────────────────────────────────────────────────
+
+async function endGame(gameId) {
+  await fetch(`${BASE}/game/${gameId}`, { method: 'DELETE' });
+}
+
+// ─── Example usage ────────────────────────────────────────────────────────
+
+(async () => {
+  // Start a game with a custom config
+  const { gameId, board: startBoard } = await startGame({
+    preset: 'fast',       // base preset
+    thinkingMs: 3000,     // override to 3 s
+    useOpeningBook: true,
+  });
+
+  console.log('Game started:', gameId);
+
+  let board = startBoard;
+
+  // Let the engine make its first move
+  const result = await engineMove(gameId, board);
+  console.log('Engine move:', result.move);  // e.g. { fx: 1, fy: 2, tx: 2, ty: 3 }
+  board = result.board;
+
+  if (result.drawOffer) {
+    console.log('Engine offers draw:', result.drawOffer);
+  }
+
+  // Later — human offers draw
+  const drawCheck = await askDraw(gameId, board);
+  console.log('Draw accepted?', drawCheck.accept, '—', drawCheck.reason);
+
+  // Clean up
+  await endGame(gameId);
+})();
+```
+
+#### Passing config options from Node
+
+| Option | Type | Example | Description |
+|---|---|---|---|
+| `preset` | `string` | `"fast"` | Base preset (`blitz`, `fast`, `default`, `strong`) |
+| `thinkingMs` | `number` | `3000` | Override think time in milliseconds |
+| `minDepth` | `number` | `6` | Override minimum search depth |
+| `useOpeningBook` | `boolean` | `false` | Toggle the opening book |
+| `useLMR` | `boolean` | `true` | Toggle Late Move Reductions |
+
+All options are optional — omit any to use the preset's value.
 
 ---
 
@@ -234,7 +552,7 @@ if (offer.ShouldOffer)
 ### Recording human moves (for repetition detection)
 
 ```csharp
-// Before applying the human's move:
+// BEFORE applying the human's move:
 memory.RecordHumanMove(board, from: (x: 3, y: 5), to: (x: 4, y: 4));
 board = board.Apply(humanMove);
 ```
@@ -252,20 +570,21 @@ board = board.Apply(humanMove);
 
 ## Opponent Profiling
 
-`GameMemory` tracks human move statistics across multiple games:
+`GameMemory` accumulates human move statistics across multiple games and exposes a statistical profile:
 
 ```csharp
 var profile = memory.GetHumanProfile();
 
 Console.WriteLine($"Aggression rate:  {profile.AggressionRate:P0}");  // % capture moves
-Console.WriteLine($"Left flank rate:  {profile.LeftFlankRate:P0}");   // % moves from x≤3
-Console.WriteLine($"Right flank rate: {profile.RightFlankRate:P0}");
-Console.WriteLine($"Avg advance:      {profile.AvgAdvance:F2} rows");
-Console.WriteLine($"Games learned:    {profile.GamesLearned} moves");
+Console.WriteLine($"Left flank rate:  {profile.LeftFlankRate:P0}");   // % moves from x ≤ 3
+Console.WriteLine($"Right flank rate: {profile.RightFlankRate:P0}");  // % moves from x ≥ 4
+Console.WriteLine($"Avg advance:      {profile.AvgAdvance:F2} rows"); // average row advancement
+Console.WriteLine($"Moves learned:    {profile.GamesLearned}");       // total moves recorded
 ```
 
-Call `memory.ResetGame()` between games (preserves cross-game stats).
-Call `memory.ResetAll()` to wipe everything.
+- Data comes from all games once ≥ 10 moves have been recorded; otherwise uses current game only.
+- Call `memory.ResetGame()` between games — preserves cross-game stats.
+- Call `memory.ResetAll()` to wipe everything.
 
 ---
 
@@ -275,14 +594,43 @@ Call `memory.ResetAll()` to wipe everything.
 // All legal moves for a side (maximum-capture rule enforced)
 IReadOnlyList<Move> moves = BrazilianCheckersEngine.GetLegalMoves(board, blackTurn: true);
 
-// Check for game over
+foreach (var mv in moves)
+    Console.WriteLine(mv); // "(fx,fy)->(tx,ty)" or "(fx,fy)->(tx,ty)x" for captures
+
+// Check for game over (current side has no legal moves)
 bool gameOver = BrazilianCheckersEngine.IsGameOver(board, blackTurn: false);
 
-// Static evaluation (for analysis — not a substitute for search)
+// Static evaluation (for analysis — not a substitute for full search)
 int score = BrazilianCheckersEngine.Evaluate(board);
 // score > 0 → black (engine) is ahead
 // score < 0 → red (human) is ahead
+// |score| ≥ 100_000 → forced win/loss
+
+// Count pieces
+var (blackPawns, blackKings, redPawns, redKings) = board.CountPieces();
 ```
+
+---
+
+## Evaluation Score Reference
+
+| Score | Meaning |
+|---|---|
+| `+100` | Black is one pawn ahead |
+| `+400` | Black is one king ahead |
+| `+100 000` | Black wins (no legal moves for red) |
+| `-100 000` | Black loses (no legal moves for black) |
+| `0` | Roughly equal position |
+
+Positional components (additive, all from black's perspective):
+- **Material** — pawn = 100 cp, king = 400 cp
+- **Piece-square tables** — pawn advancement bonus + king centrality
+- **Mobility** — number of legal moves available (weight increases in endgame)
+- **Threats** — penalty for pieces immediately capturable
+- **Backed pieces** — bonus for pieces with a diagonal friendly neighbor
+- **Pre-promotion** — bonus for pawns one row from the back rank
+- **Border penalty** — edge-file pawns penalized in middlegame
+- **King pursuit** — in deep endgames, bonus for kings close to enemy pieces
 
 ---
 
@@ -295,7 +643,7 @@ dotnet build checkers-engine/
 # Release
 dotnet build checkers-engine/ -c Release
 
-# Self-contained binary (if used as a CLI)
+# Self-contained binary (if used as a CLI wrapper)
 dotnet publish checkers-engine/ -c Release -r win-x64 --self-contained
 dotnet publish checkers-engine/ -c Release -r linux-x64 --self-contained
 ```
@@ -313,8 +661,8 @@ checkers-engine/
 ├── CheckersEngine.csproj        ← Class library project file
 └── Engine/
     ├── Piece.cs                 ← Piece enum + PieceHelper
-    ├── Move.cs                  ← Move value type
-    ├── Board.cs                 ← Board state, apply, factories
+    ├── Move.cs                  ← Move value type (fx, fy, tx, ty, isCapture)
+    ├── Board.cs                 ← Board state, Apply, factories, CountPieces
     ├── MoveGenerator.cs         ← Legal move generation (max-capture rule)
     ├── Evaluator.cs             ← Static position evaluation
     ├── TranspositionTable.cs    ← Zobrist TT, always-replace
@@ -336,6 +684,10 @@ All scores are from **black's perspective**:
 - **Dama-voadora** — a pawn reaching the back rank mid-chain is not promoted until the chain ends.
 - **King re-capture prevention** — sentinel markers on captured squares prevent kings from re-crossing them within the same chain.
 
+### Thread safety
+
+A single `BrazilianCheckersEngine` instance is **not** thread-safe. Create one instance per concurrent game.
+
 ---
 
 ## Differences from `services/checkers_bot`
@@ -347,7 +699,7 @@ All scores are from **black's perspective**:
 | Configuration | Hardcoded constants | `EngineConfig` record with presets |
 | Draw logic | Implemented in Node.js (`CheckersBotService.js`) | Ported to C# (`DrawAdvisor.cs`) |
 | Board factory | `FromJson` only | `FromJson`, `FromArray`, `StartingPosition`, `ToArray` |
-| TT size | Fixed 2^21 | Configurable 2^[16-24] |
+| TT size | Fixed 2^21 | Configurable 2^[16–24] |
 | Think time | Fixed 8 s | Configurable per-instance or per-call |
 | Opening book | Always enabled | Togglable via `UseOpeningBook` |
 | All search features | Always enabled | Individually togglable for testing |
