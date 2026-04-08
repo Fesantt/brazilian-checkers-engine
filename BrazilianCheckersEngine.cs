@@ -1,6 +1,7 @@
 namespace CheckersEngine;
 
 using CheckersEngine.Engine;
+using CheckersEngine.Engine.Tablebase;
 
 /// <summary>
 /// Main entry point for the Brazilian Checkers (Damas Brasileiras) engine library.
@@ -37,11 +38,15 @@ using CheckersEngine.Engine;
 /// </remarks>
 public sealed class BrazilianCheckersEngine
 {
-    private readonly EngineConfig _cfg;
-    private readonly Search       _search;
+    private readonly EngineConfig      _cfg;
+    private readonly Search            _search;
+    private readonly EndgameTablebase? _tablebase;
 
     /// <summary>The configuration this engine instance was created with.</summary>
     public EngineConfig Config => _cfg;
+
+    /// <summary>The endgame tablebase attached to this engine instance, if any.</summary>
+    public EndgameTablebase? Tablebase => _tablebase;
 
     /// <summary>
     /// Creates an engine with the given configuration.
@@ -49,10 +54,15 @@ public sealed class BrazilianCheckersEngine
     /// <param name="config">
     /// Engine configuration. If <c>null</c>, <see cref="EngineConfig.Default"/> is used.
     /// </param>
-    public BrazilianCheckersEngine(EngineConfig? config = null)
+    /// <param name="tablebase">
+    /// Optional endgame tablebase. When provided, positions with few enough pieces are
+    /// resolved instantly without running the full search.
+    /// </param>
+    public BrazilianCheckersEngine(EngineConfig? config = null, EndgameTablebase? tablebase = null)
     {
-        _cfg    = config ?? EngineConfig.Default;
-        _search = new Search(_cfg);
+        _cfg       = config ?? EngineConfig.Default;
+        _tablebase = tablebase;
+        _search    = new Search(_cfg);
     }
 
     // ─── Move search ─────────────────────────────────────────────────────────
@@ -76,8 +86,22 @@ public sealed class BrazilianCheckersEngine
         int?  activePieceY = null,
         int   thinkingMs   = 0)
     {
+        // Probe tablebase first (no chain capture in progress, full position)
+        if (_tablebase != null && activePieceX == null)
+        {
+            var tbMove = _tablebase.BestMove(board, blackTurn: true);
+            if (tbMove != null) return tbMove;
+        }
+
         return _search.FindBestMove(board, activePieceX, activePieceY, thinkingMs);
     }
+
+    /// <summary>
+    /// Probes the attached endgame tablebase for the given position.
+    /// Returns <c>null</c> if no tablebase is attached or the position is not covered.
+    /// </summary>
+    public TablebaseResult? ProbeTablebase(Board board, bool blackTurn) =>
+        _tablebase?.Probe(board, blackTurn);
 
     // ─── Draw logic ───────────────────────────────────────────────────────────
 

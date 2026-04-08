@@ -525,6 +525,196 @@ All options are optional — omit any to use the preset's value.
 
 ---
 
+## Endgame Tablebase
+
+The library ships with a built-in retrograde-analysis tablebase generator.
+All positions with at most N total pieces are solved with **perfect play** from both sides.
+
+### How it works
+
+The generator uses **retrograde analysis** (backward induction):
+
+1. **Phase 1 — Terminal & cross-config:** scan every position. If a side has no legal moves → Loss. For each capture move, look up the result in the already-generated sub-tablebase (one fewer piece).
+2. **Phase 2 — BFS retrograde:** propagate Win/Loss backwards through non-capture moves within the same configuration using reverse move generation.
+3. **Phase 3 — Draw:** any position still unresolved after convergence is a Draw.
+
+Configurations are generated from fewest pieces to most, so cross-config lookups are always ready.
+
+### Generating and saving
+
+```csharp
+using CheckersEngine.Engine.Tablebase;
+
+// Show progress per configuration
+var progress = new Progress<GenerationProgress>(p =>
+    Console.WriteLine($"  {p.Config,-30} {p.Positions,12:N0} positions  {p.Wins,10:N0} W  {p.Losses,10:N0} L  {p.Draws,10:N0} D  ({p.ElapsedMs} ms)")
+);
+
+// Generate all configs with ≤ 6 pieces (one-time, then save to disk)
+var tb = EndgameTablebase.Generate(maxPieces: 6, progress: progress);
+tb.Save("./tablebase");
+
+Console.WriteLine($"Configs: {tb.ConfigCount},  Positions: {tb.TotalPositions:N0},  Disk: {tb.DiskBytes / 1_048_576.0:F1} MB");
+```
+
+**Memory during generation (approximate peak per configuration):**
+
+| Max pieces | Peak memory (worst config) | Disk size (total) |
+|---|---|---|
+| 4 | < 10 MB | < 2 MB |
+| 5 | ~150 MB | ~20 MB |
+| 6 | up to ~2 GB | ~500 MB |
+
+### Generating a single specific configuration
+
+```csharp
+// Generate only the "1 black king vs 2 red kings" endgame
+// (all sub-configs needed for capture lookups are auto-generated)
+var tb = EndgameTablebase.GenerateConfig(bp: 0, bk: 1, rp: 0, rk: 2, progress: progress);
+tb.Save("./tablebase");
+```
+
+### Loading
+
+```csharp
+// Load all .tb files from the directory (fast — a few seconds)
+var tb = EndgameTablebase.Load("./tablebase");
+
+// Inspect loaded configs
+foreach (string line in tb.ConfigSummary())
+    Console.WriteLine(line);
+// Output:
+//   0bp+1bk vs 0rp+1rk  (32 positions/side)
+//   0bp+1bk vs 1rp+0rk  (1,024 positions/side)
+//   ...
+```
+
+### Probing positions
+
+```csharp
+// Probe a position directly
+TablebaseResult? result = tb.Probe(board, blackTurn: true);
+
+if (result.HasValue)
+{
+    Console.WriteLine(result.Value);          // "Win in 4 moves" / "Loss in 7 moves" / "Draw"
+    Console.WriteLine(result.Value.Outcome);  // TablebaseOutcome.Win / Loss / Draw
+    Console.WriteLine(result.Value.Dtm);      // distance-to-mate in plies
+}
+
+// Get the optimal move from the tablebase
+Move? best = tb.BestMove(board, blackTurn: true);
+// Prefers: Win (fastest) > Draw > Loss (slowest)
+```
+
+### Integrating with the engine
+
+Pass the tablebase when constructing the engine. Positions covered by the tablebase are resolved **instantly** without running the full search:
+
+```csharp
+// Generate (or load) the tablebase
+var tb = EndgameTablebase.Load("./tablebase");
+
+// Engine now uses TB for endgames automatically
+var engine = new BrazilianCheckersEngine(EngineConfig.Default, tablebase: tb);
+
+// Probe manually if needed (e.g. to show the result to the user)
+TablebaseResult? r = engine.ProbeTablebase(board, blackTurn: true);
+```
+
+### Node.js integration with tablebase
+
+Add the tablebase endpoint to the ASP.NET Core wrapper:
+
+```csharp
+// POST /game/start
+// Body: { "preset": "default", "tablebasePath": "./tablebase" }
+app.MapPost("/game/start", (StartRequest req) =>
+{
+    string id = Guid.NewGuid().ToString("N");
+
+    EndgameTablebase? tb = null;
+    if (!string.IsNullOrEmpty(req.TablebasePath) && Directory.Exists(req.TablebasePath))
+        tb = EndgameTablebase.Load(req.TablebasePath);
+
+    var cfg = /* resolve preset */ EngineConfig.Default;
+    engines[id]  = new BrazilianCheckersEngine(cfg, tb);
+    memories[id] = new GameMemory();
+
+    return Results.Ok(new { gameId = id, tablebaseLoaded = tb != null });
+});
+
+// GET /game/{id}/probe — probe the tablebase for a position
+app.MapPost("/game/{id}/probe", (string id, BoardRequest req) =>
+{
+    if (!engines.TryGetValue(id, out var engine)) return Results.NotFound();
+    var board  = Board.FromArray(req.Board);
+    var result = engine.ProbeTablebase(board, blackTurn: req.BlackTurn ?? true);
+    return Results.Ok(new
+    {
+        covered = result.HasValue,
+        outcome = result?.Outcome.ToString(),  // "Win" / "Loss" / "Draw" / null
+        dtm     = result?.Dtm,
+    });
+});
+```
+
+From Node.js:
+
+```js
+// Start a game with tablebase
+const { gameId } = await fetch(`${BASE}/game/start`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ preset: 'default', tablebasePath: './tablebase' }),
+}).then(r => r.json());
+
+// Probe a position (e.g. to display TB result to the user)
+const probe = await fetch(`${BASE}/game/${gameId}/probe`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ board: currentBoard, blackTurn: true }),
+}).then(r => r.json());
+
+if (probe.covered) {
+  console.log(`TB says: ${probe.outcome} in ${Math.ceil(probe.dtm / 2)} moves`);
+}
+```
+
+### Generating the tablebase from a standalone script
+
+```csharp
+// GenerateTablebase.cs (add as a dotnet-script or Console app)
+using CheckersEngine.Engine.Tablebase;
+
+int maxPieces = args.Length > 0 ? int.Parse(args[0]) : 6;
+string outDir = args.Length > 1 ? args[1] : "./tablebase";
+
+Console.WriteLine($"Generating tablebase (maxPieces={maxPieces}) → {outDir}");
+
+var progress = new Progress<GenerationProgress>(p =>
+    Console.WriteLine($"  [{p.ElapsedMs,6} ms] {p.Config,-30}  {p.Positions,12:N0} positions  "
+                    + $"W:{p.Wins:N0}  L:{p.Losses:N0}  D:{p.Draws:N0}")
+);
+
+var sw = System.Diagnostics.Stopwatch.StartNew();
+var tb = EndgameTablebase.Generate(maxPieces, progress);
+tb.Save(outDir);
+
+Console.WriteLine($"\nDone in {sw.Elapsed.TotalSeconds:F1} s");
+Console.WriteLine($"  Configs:   {tb.ConfigCount}");
+Console.WriteLine($"  Positions: {tb.TotalPositions:N0}");
+Console.WriteLine($"  Disk:      {tb.DiskBytes / 1_048_576.0:F1} MB");
+```
+
+Run it:
+
+```bash
+dotnet run --project GenerateTablebase -- 6 ./tablebase
+```
+
+---
+
 ## Draw Logic
 
 ### Accepting a human's draw offer
