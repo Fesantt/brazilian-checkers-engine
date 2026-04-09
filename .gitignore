@@ -51,3 +51,6 @@ examples/CheckersEngine.Tests/bin/
 /CheckersEngine.Tests/obj/
 GenerateTablebases/bin/
 GenerateTablebases/obj/
+CheckersEngine.Tests/obj/
+CheckersEngine.Tests/bin/
+tablebases/*
