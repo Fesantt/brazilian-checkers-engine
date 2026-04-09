@@ -62,7 +62,7 @@ public sealed class BrazilianCheckersEngine
     {
         _cfg       = config ?? EngineConfig.Default;
         _tablebase = tablebase;
-        _search    = new Search(_cfg);
+        _search    = new Search(_cfg, _tablebase);
     }
 
     // ─── Move search ─────────────────────────────────────────────────────────

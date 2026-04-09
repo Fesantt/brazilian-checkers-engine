@@ -1,5 +1,7 @@
 namespace CheckersEngine.Engine;
 
+using CheckersEngine.Engine.Tablebase;
+
 /// <summary>
 /// Brazilian checkers search engine.
 /// </summary>
@@ -22,31 +24,57 @@ public sealed class Search
 {
     private readonly EngineConfig        _cfg;
     private readonly TranspositionTable  _tt;
+    private readonly EndgameTablebase?   _tablebase;
     private readonly Move[,]             _killers = new Move[64, 2];
     private readonly int[,,,]            _history = new int[8, 8, 8, 8];
+
+    // Simple in-search repetition tracker: hashes along the current search path.
+    // Prevents the engine from playing into known repeated positions during search.
+    private readonly ulong[] _repPath = new ulong[128];
+    private int _repLen;
 
     private static readonly Exception Timeout = new TimeoutException("search timeout");
 
     // ─── Opening book ─────────────────────────────────────────────────────────
-    // (minTotal, maxTotal, move) — total piece count range determines applicability.
+    // (minTotal, maxTotal, move) — total piece count range gates applicability;
+    // the move is only played if it is actually legal in the current position.
+    // All moves use dark squares (x+y is odd), matching the Brazilian checkers layout.
 
     private static readonly (int minTotal, int maxTotal, Move mv)[] Book =
     [
-        (24, 24, new Move(2, 2, 3, 3)),
-        (24, 24, new Move(4, 2, 3, 3)),
-        (22, 23, new Move(2, 0, 3, 1)),
-        (22, 23, new Move(4, 0, 3, 1)),
-        (20, 21, new Move(6, 0, 7, 1)),
-        (20, 21, new Move(0, 0, 1, 1)),
-        (18, 19, new Move(1, 1, 2, 2)),
-        (18, 19, new Move(5, 1, 4, 2)),
+        // 24 pieces — first move; only front-rank pawns (y=2) can move: x ∈ {1,3,5,7}
+        (24, 24, new Move(3, 2, 4, 3)),   // center right — most popular
+        (24, 24, new Move(5, 2, 4, 3)),   // center left  — equally strong
+        (24, 24, new Move(3, 2, 2, 3)),   // semi-center left
+        (24, 24, new Move(5, 2, 6, 3)),   // semi-center right
+
+        // 22–23 pieces — early follow-ups
+        (22, 23, new Move(1, 2, 2, 3)),   // left flank pawn forward
+        (22, 23, new Move(7, 2, 6, 3)),   // right flank pawn forward
+        (22, 23, new Move(3, 0, 4, 1)),   // back-rank pawn, supports center
+        (22, 23, new Move(5, 0, 4, 1)),   // back-rank pawn, supports center
+
+        // 20–21 pieces — mid-opening development
+        (20, 21, new Move(1, 0, 2, 1)),   // back-rank left development
+        (20, 21, new Move(7, 0, 6, 1)),   // back-rank right development
+        (20, 21, new Move(5, 2, 6, 3)),   // right pawn if not yet advanced
+
+        // 18–19 pieces — later opening
+        (18, 19, new Move(0, 1, 1, 2)),   // left-side development
+        (18, 19, new Move(4, 1, 5, 2)),   // center development
     ];
 
     /// <summary>Creates a search engine using the supplied configuration.</summary>
-    public Search(EngineConfig cfg)
+    /// <param name="cfg">Engine configuration.</param>
+    /// <param name="tablebase">
+    /// Optional endgame tablebase. When provided, it is probed inside the search tree
+    /// for any position with few enough pieces, returning exact results instantly.
+    /// </param>
+    public Search(EngineConfig cfg, EndgameTablebase? tablebase = null)
     {
-        _cfg = cfg;
-        _tt  = new TranspositionTable(cfg.TranspositionTableSizePow2);
+        _cfg       = cfg;
+        _tablebase = tablebase;
+        _tt        = new TranspositionTable(cfg.TranspositionTableSizePow2);
     }
 
     // ─── Entry point ─────────────────────────────────────────────────────────
@@ -91,6 +119,7 @@ public sealed class Search
         _tt.Clear();
         Array.Clear(_killers);
         Array.Clear(_history);
+        _repLen = 0;
 
         Move bestMove  = moves[0];
         int  bestScore = Evaluator.LoseScore(0);
@@ -150,7 +179,7 @@ public sealed class Search
                 }
 
                 // Re-sort root moves using TT score for next iteration
-                ulong rootHash = TranspositionTable.Hash(board);
+                ulong rootHash = TranspositionTable.Hash(board, true);
                 _tt.TryGetMove(rootHash, out var ttRootMove);
                 moves.Sort((a, b) =>
                     MoveScore(board, b, 0, ttRootMove).CompareTo(MoveScore(board, a, 0, ttRootMove)));
@@ -211,9 +240,39 @@ public sealed class Search
         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= deadline)
             throw Timeout;
 
-        ulong hash = TranspositionTable.Hash(board);
+        ulong hash = TranspositionTable.Hash(board, blackTurn);
+
+        // In-search repetition detection: returning 0 (draw) prevents the engine
+        // from cycling into positions it has already visited on this path.
+        if (ply > 0)
+        {
+            for (int r = _repLen - 1; r >= 0; r--)
+                if (_repPath[r] == hash) return 0;
+        }
+
         if (_tt.TryGet(hash, depth, alpha, beta, out int cached, out _))
             return cached;
+
+        // Probe endgame tablebase for an instant exact result on covered positions.
+        if (_tablebase != null && depth > 0)
+        {
+            var tbr = _tablebase.Probe(board, blackTurn);
+            if (tbr != null)
+            {
+                int magnitude = Evaluator.WinBase + 50 - tbr.Value.Dtm;
+                int tbScore;
+                if (tbr.Value.Outcome == TablebaseOutcome.Draw)
+                    tbScore = 0;
+                else
+                {
+                    bool blackWins = (blackTurn  && tbr.Value.Outcome == TablebaseOutcome.Win)
+                                  || (!blackTurn && tbr.Value.Outcome == TablebaseOutcome.Loss);
+                    tbScore = blackWins ? magnitude : -magnitude;
+                }
+                _tt.Store(hash, depth, tbScore, TtFlag.Exact, default);
+                return tbScore;
+            }
+        }
 
         var moves = MoveGenerator.GetLegalMoves(board, blackTurn);
 
@@ -232,6 +291,9 @@ public sealed class Search
         }
 
         OrderMoves(board, moves, ply, hash);
+
+        // Push this position onto the repetition path before exploring children
+        if (_repLen < _repPath.Length) _repPath[_repLen++] = hash;
 
         TtFlag flag    = blackTurn ? TtFlag.Upper : TtFlag.Lower;
         Move bestMove  = moves[0];
@@ -272,6 +334,8 @@ public sealed class Search
                 else
                 {
                     score = PVS(nb, nextDepth - reduction, alpha, alpha + 1, nextBlack, deadline, nextPly);
+                    // Re-search at full window if the null-window search improved alpha,
+                    // or if LMR reduced depth may have produced an imprecise fail-high.
                     if (score > alpha && (score < beta || lmr))
                         score = PVS(nb, nextDepth, alpha, beta, nextBlack, deadline, nextPly);
                 }
@@ -282,6 +346,7 @@ public sealed class Search
                 {
                     if (!mv.IsCapture) UpdateQuietHeuristics(mv, ply, depth);
                     _tt.Store(hash, depth, best, TtFlag.Lower, bestMove);
+                    _repLen--;
                     return best;
                 }
             }
@@ -292,7 +357,11 @@ public sealed class Search
                 else
                 {
                     score = PVS(nb, nextDepth - reduction, beta - 1, beta, nextBlack, deadline, nextPly);
-                    if (score < beta && (score > alpha || lmr))
+                    // Re-search at full window whenever the null-window result is within
+                    // the interesting range (score < beta). Fix: the previous condition
+                    // incorrectly skipped re-searches when score ≤ alpha, missing moves
+                    // that are very good for the minimizer.
+                    if (score < beta)
                         score = PVS(nb, nextDepth, alpha, beta, nextBlack, deadline, nextPly);
                 }
 
@@ -302,12 +371,14 @@ public sealed class Search
                 {
                     if (!mv.IsCapture) UpdateQuietHeuristics(mv, ply, depth);
                     _tt.Store(hash, depth, best, TtFlag.Upper, bestMove);
+                    _repLen--;
                     return best;
                 }
             }
         }
 
         _tt.Store(hash, depth, best, flag, bestMove);
+        _repLen--;
         return best;
     }
 

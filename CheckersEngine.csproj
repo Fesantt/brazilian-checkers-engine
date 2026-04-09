@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Remove="CheckersEngine.Tests\**" />
+    <Compile Remove="GenerateTablebase\**" />
+  </ItemGroup>
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net8.0</TargetFramework>
@@ -9,9 +13,9 @@
     <RootNamespace>CheckersEngine</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Version>1.0.0</Version>
+    <Version>2.0.0</Version>
     <Authors>Fesantt</Authors>
-    <Description>Brazilian Checkers (Damas Brasileiras) engine library — PVS, aspiration windows, TT, LMR, killer moves, history heuristic, quiescence search.</Description>
+    <Description>Brazilian Checkers (Damas Brasileiras) engine library — PVS, aspiration windows, TT (with turn bit), LMR, killer moves, history heuristic, quiescence search, endgame tablebase, in-search repetition detection.</Description>
     <PackageTags>checkers;damas;brazilian-checkers;game-engine;pvs;alpha-beta</PackageTags>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>

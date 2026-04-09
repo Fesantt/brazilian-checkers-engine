@@ -42,6 +42,13 @@ public sealed class TranspositionTable
     // Piece values: RedPawn=1, RedKing=2, BlackPawn=3, BlackKing=4
     private static readonly ulong[] ZKeys;
 
+    /// <summary>
+    /// XOR-ed into the hash when it is black's turn to move.
+    /// Prevents positions with identical piece layouts but different sides-to-move
+    /// from colliding in the transposition table.
+    /// </summary>
+    private static readonly ulong TurnKey;
+
     static TranspositionTable()
     {
         ZKeys = new ulong[64 * 5];
@@ -52,6 +59,8 @@ public sealed class TranspositionTable
             rng.NextBytes(buf);
             ZKeys[i] = BitConverter.ToUInt64(buf);
         }
+        rng.NextBytes(buf);
+        TurnKey = BitConverter.ToUInt64(buf);
     }
 
     /// <summary>
@@ -72,10 +81,13 @@ public sealed class TranspositionTable
     }
 
     /// <summary>
-    /// Computes the Zobrist hash for <paramref name="board"/>.
-    /// The hash is XOR-based and depends only on piece positions, not on turn.
+    /// Computes the Zobrist hash for <paramref name="board"/> and the side to move.
+    /// The hash encodes both piece positions and whose turn it is, preventing
+    /// collisions between positions with identical layouts but different active sides.
     /// </summary>
-    public static ulong Hash(Board board)
+    /// <param name="board">The board position to hash.</param>
+    /// <param name="blackTurn"><c>true</c> if it is black's turn to move.</param>
+    public static ulong Hash(Board board, bool blackTurn)
     {
         ulong h = 0;
         for (int y = 0; y < 8; y++)
@@ -85,6 +97,7 @@ public sealed class TranspositionTable
             if (p == Piece.Empty || p == Piece.Sentinel) continue;
             h ^= ZKeys[(y * 8 + x) * 5 + (int)p - 1];
         }
+        if (blackTurn) h ^= TurnKey;
         return h;
     }
 

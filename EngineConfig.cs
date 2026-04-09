@@ -49,10 +49,10 @@ public sealed record EngineConfig
     /// <summary>
     /// Size of the transposition table as a power of 2.
     /// Actual entry count = 2^<c>TranspositionTableSizePow2</c>.
-    /// Each entry is 32 bytes → total memory ≈ 2^N × 32 bytes.
-    ///   • 21 → 2 097 152 entries ≈ 64 MB  (default)
-    ///   • 20 → 1 048 576 entries ≈ 32 MB
-    ///   • 22 → 4 194 304 entries ≈ 128 MB
+    /// Each entry is ≈ 40 bytes → total memory ≈ 2^N × 40 bytes.
+    ///   • 21 → 2 097 152 entries ≈  80 MB  (default)
+    ///   • 20 → 1 048 576 entries ≈  40 MB
+    ///   • 22 → 4 194 304 entries ≈ 160 MB
     /// </summary>
     public int TranspositionTableSizePow2 { get; init; } = 21;
 

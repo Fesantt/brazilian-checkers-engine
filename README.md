@@ -70,10 +70,10 @@ All settings live in `EngineConfig`, an immutable record with `init`-only proper
 ### Presets
 
 ```csharp
-EngineConfig.Blitz   // 1 s,  depth ≥ 3,  small TT (~16 MB)
-EngineConfig.Fast    // 2 s,  depth ≥ 5,  medium TT (~32 MB)
-EngineConfig.Default // 8 s,  depth ≥ 9,  standard TT (~64 MB)
-EngineConfig.Strong  // 15 s, depth ≥ 12, large TT (~128 MB)
+EngineConfig.Blitz   // 1 s,  depth ≥ 3,  small TT   (~20 MB)
+EngineConfig.Fast    // 2 s,  depth ≥ 5,  medium TT  (~40 MB)
+EngineConfig.Default // 8 s,  depth ≥ 9,  standard TT (~80 MB)
+EngineConfig.Strong  // 15 s, depth ≥ 12, large TT   (~160 MB)
 ```
 
 ### Custom configuration
@@ -880,22 +880,6 @@ A single `BrazilianCheckersEngine` instance is **not** thread-safe. Create one i
 
 ---
 
-## Differences from `services/checkers_bot`
-
-| Aspect | `services/checkers_bot` | `checkers-engine` |
-|---|---|---|
-| Output type | Console app (stdin/stdout JSON) | Class library (direct method calls) |
-| API | JSON newline-delimited protocol | Typed C# methods |
-| Configuration | Hardcoded constants | `EngineConfig` record with presets |
-| Draw logic | Implemented in Node.js (`CheckersBotService.js`) | Ported to C# (`DrawAdvisor.cs`) |
-| Board factory | `FromJson` only | `FromJson`, `FromArray`, `StartingPosition`, `ToArray` |
-| TT size | Fixed 2^21 | Configurable 2^[16–24] |
-| Think time | Fixed 8 s | Configurable per-instance or per-call |
-| Opening book | Always enabled | Togglable via `UseOpeningBook` |
-| All search features | Always enabled | Individually togglable for testing |
-
----
-
 ## License
 
-Internal project — all rights reserved.
+MIT.
