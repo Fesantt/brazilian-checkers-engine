@@ -882,4 +882,4 @@ A single `BrazilianCheckersEngine` instance is **not** thread-safe. Create one i
 
 ## License
 
-MIT.
+APACHE 2.0.
