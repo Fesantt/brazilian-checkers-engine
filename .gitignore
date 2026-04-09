@@ -47,3 +47,7 @@ publish/
 .claude/
 /examples/CheckersApi/bin/
 /examples/CheckersApi/obj/
+/CheckersEngine.Tests/bin/
+/CheckersEngine.Tests/obj/
+/GenerateTablebases/bin/
+/GenerateTablebases/obj/
