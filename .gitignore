@@ -45,9 +45,9 @@ publish/
 # Dotnet tools
 .dotnet/
 .claude/
-/examples/CheckersApi/bin/
-/examples/CheckersApi/obj/
-/CheckersEngine.Tests/bin/
+examples/CheckersApi/bin/
+examples/CheckersApi/obj/
+examples/CheckersEngine.Tests/bin/
 /CheckersEngine.Tests/obj/
-/GenerateTablebases/bin/
-/GenerateTablebases/obj/
+GenerateTablebases/bin/
+GenerateTablebases/obj/
